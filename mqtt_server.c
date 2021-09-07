@@ -44,6 +44,113 @@
 #define MAXDATASIZE 100
 #define MAXLINE 65000
 
+typedef struct {
+    int remainingLength, multiplierOffset;
+} remainingLengthStruct;
+
+remainingLengthStruct* decodeRemainingLength(uint8_t* remainingLengthStream) {
+    int multiplier = 1;
+    int value = 0;
+    int offset = -1;
+    uint8_t encodedByte;
+
+    do{
+        offset++;
+        encodedByte = remainingLengthStream[offset];
+        value += (encodedByte & 127) * multiplier;
+
+        if (multiplier > 128*128*128){
+            printf("Malformed Remaining Length\n");
+            exit(8);
+        }               
+
+        multiplier *= 128;        
+
+    } while ((encodedByte & 128) != 0);
+
+    remainingLengthStruct *returnLength = malloc(sizeof(remainingLengthStruct));
+    returnLength->multiplierOffset = offset;
+    returnLength->remainingLength = value;
+
+    return returnLength;    
+}
+
+void CONNECT(uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+    if(flags != 0){        
+        printf("Invalid flags! Close network connection. [MQTT-2.2.2-2]");
+        close(connfd);
+        return;
+    }
+
+    uint16_t protocolNameLength = (receivedCommunication[0] << 8) | receivedCommunication[1];
+
+    char* protocolName = malloc(protocolNameLength);
+
+    for(uint16_t i=0; i<protocolNameLength; i++){
+        protocolName[i] = receivedCommunication[2+i];
+    }
+
+    printf("Protocol Name:%s\n", protocolName);
+
+    if(strcmp(protocolName,"MQTT") != 0){
+        printf("Unrecognized protocol. Closing connection. [MQTT-3.1.2-1]\n");
+        close(connfd); //protocolo nao reconhecido
+        return;
+    }
+
+    uint8_t protocolLevel = receivedCommunication[2 + protocolNameLength];
+
+    if(protocolLevel != 4){
+        printf("Unrecognized protocol level %d. [MQTT-3.1.2-2]", protocolLevel);
+        //CONNACK 1
+        close(connfd);
+        return;
+    }
+
+    uint8_t connectionFlags = receivedCommunication[3 + protocolNameLength];
+
+    if(connectionFlags & 1){
+        printf("Control reserved bit set. ClosingConnection.  [MQTT-3.1.2-3]\n");
+        close(connfd);
+        return;
+    }
+
+    //OBS: como nao devo me preocupar com falhas agora, nao vou me preocupar com o Cleanssession Flag. Vou Assumir que esta sempre vindo como 1
+
+    uint willFlag = connectionFlags & 4;
+    uint willQoS, willRetain;
+
+    if(willFlag){
+        printf("Will flag set.\n");
+
+        willQoS = connectionFlags & 24;
+        willRetain = connectionFlags & 32;
+
+        printf("Will quality of service: %d\n", willQoS);
+        printf("Will Retain: %d\n", willRetain);
+    }
+    else {
+        willQoS = 0;
+        willRetain = 0;
+    }
+
+    uint userNameFlag = connectionFlags & 128;
+    uint passwordFlag = 0;
+
+    if(userNameFlag){
+        printf("Username flag set\n");
+
+        passwordFlag = connectionFlags & 64;
+        if(passwordFlag){
+            printf("Password flag set\n");
+        }
+    }
+
+    uint16_t keepAliveTime = (receivedCommunication[4 + protocolNameLength] << 8) | (receivedCommunication[5 + protocolNameLength]);
+    printf("Keep Alive time:%d\n", keepAliveTime);
+
+}
+
 int main (int argc, char **argv) {
     /* Os sockets. Um que será o socket que vai escutar pelas conexões
      * e o outro que vai ser o socket específico de cada conexão */
@@ -157,16 +264,20 @@ int main (int argc, char **argv) {
             while ((n=read(connfd, receivedCommunication, MAXLINE)) > 0) {
                 
                 //fixedHeader
-                uint8_t control = receivedCommunication[0];
-                uint8_t remainingLength = receivedCommunication[1];
+                uint8_t control = receivedCommunication[0];                
+                remainingLengthStruct* remainingLength = decodeRemainingLength(&receivedCommunication[1]);
+
+                printf("Remaining Length:%d\n", remainingLength->remainingLength);
+                printf("Multiplier offset:%d\n", remainingLength->multiplierOffset);
 
                 uint8_t packetType = control >> 4;
-                uint8_t flags = control & 240;                
+                uint8_t flags = control & 15;                
 
                 switch (packetType)
                 {
                     case 1:
-                        printf("CONNECT control packet type\n");                    
+                        printf("CONNECT control packet type\n");          
+                        CONNECT(flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
                         break;
                     case 3:
                         printf("PUBLISH control packet type\n");                    
