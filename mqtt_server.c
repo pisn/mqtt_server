@@ -42,7 +42,7 @@
 
 #define LISTENQ 1
 #define MAXDATASIZE 100
-#define MAXLINE 4096
+#define MAXLINE 65000
 
 int main (int argc, char **argv) {
     /* Os sockets. Um que será o socket que vai escutar pelas conexões
@@ -54,7 +54,7 @@ int main (int argc, char **argv) {
      * quem é o processo pai */
     pid_t childpid;
     /* Armazena linhas recebidas do cliente */
-    char recvline[MAXLINE + 1];
+    uint8_t  receivedCommunication[MAXLINE + 1];
     /* Armazena o tamanho da string lida do cliente */
     ssize_t n;
    
@@ -154,14 +154,52 @@ int main (int argc, char **argv) {
             /* ========================================================= */
             /* TODO: É esta parte do código que terá que ser modificada
              * para que este servidor consiga interpretar comandos MQTT  */
-            while ((n=read(connfd, recvline, MAXLINE)) > 0) {
-                recvline[n]=0;
-                printf("[Cliente conectado no processo filho %d enviou:] ",getpid());
-                if ((fputs(recvline,stdout)) == EOF) {
-                    perror("fputs :( \n");
-                    exit(6);
+            while ((n=read(connfd, receivedCommunication, MAXLINE)) > 0) {
+                
+                //fixedHeader
+                uint8_t control = receivedCommunication[0];
+                uint8_t remainingLength = receivedCommunication[1];
+
+                uint8_t packetType = control >> 4;
+                uint8_t flags = control & 240;                
+
+                switch (packetType)
+                {
+                    case 1:
+                        printf("CONNECT control packet type\n");                    
+                        break;
+                    case 3:
+                        printf("PUBLISH control packet type\n");                    
+                        break;
+                    case 4:
+                        printf("PUBACK control packet type\n");                    
+                        break;
+                    case 5:
+                        printf("PUBREC control packet type\n");                    
+                        break;
+                    case 6:
+                        printf("PUBREL control packet type\n");                    
+                        break;
+                    case 7:
+                        printf("PUBCOMP control packet type\n");                    
+                        break;
+                    case 8:
+                        printf("SUBSCRIBE control packet type\n");                    
+                        break;
+                    case 10:
+                        printf("UNSUBSCRIBE control packet type\n");                    
+                        break;
+                    case 12:
+                        printf("PINGREQ control packet type\n");                    
+                        break;
+                    case 14:
+                        printf("DISCONNECT control packet type\n");                    
+                        break;
+                    default:
+                        printf("Unrecognized communication client to server: %d \n", packetType);                    
+                        break;
                 }
-                write(connfd, recvline, strlen(recvline));
+
             }
             /* ========================================================= */
             /* ========================================================= */
