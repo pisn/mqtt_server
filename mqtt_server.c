@@ -75,7 +75,29 @@ remainingLengthStruct* decodeRemainingLength(uint8_t* remainingLengthStream) {
     return returnLength;    
 }
 
+typedef struct {
+    uint16_t stringLength;
+    char* string;
+} utf8String;
+
+utf8String* decodeUtf8String(uint8_t* utf8EncodedStream){
+    uint16_t stringLength = (utf8EncodedStream[0] << 8) | utf8EncodedStream[1];
+    printf("Size:%d\n", stringLength);
+
+    utf8String* returnString = malloc(sizeof(utf8String));
+    returnString->stringLength = stringLength;
+    returnString->string = malloc(stringLength*sizeof(char));
+
+    for(uint16_t i=0; i<stringLength;i++){
+        returnString->string[i] = utf8EncodedStream[2+i];
+    }
+
+    return returnString;
+}
+
 void CONNECT(uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+    int offset = 0;
+
     if(flags != 0){        
         printf("Invalid flags! Close network connection. [MQTT-2.2.2-2]");
         close(connfd);
@@ -83,12 +105,14 @@ void CONNECT(uint8_t flags, uint8_t* receivedCommunication, int remainingLength,
     }
 
     uint16_t protocolNameLength = (receivedCommunication[0] << 8) | receivedCommunication[1];
+    offset +=2;
 
     char* protocolName = malloc(protocolNameLength);
 
     for(uint16_t i=0; i<protocolNameLength; i++){
-        protocolName[i] = receivedCommunication[2+i];
+        protocolName[i] = receivedCommunication[offset+i];
     }
+    offset += protocolNameLength;
 
     printf("Protocol Name:%s\n", protocolName);
 
@@ -98,16 +122,18 @@ void CONNECT(uint8_t flags, uint8_t* receivedCommunication, int remainingLength,
         return;
     }
 
-    uint8_t protocolLevel = receivedCommunication[2 + protocolNameLength];
+    uint8_t protocolLevel = receivedCommunication[offset];
+    offset++;
 
     if(protocolLevel != 4){
         printf("Unrecognized protocol level %d. [MQTT-3.1.2-2]", protocolLevel);
-        //CONNACK 1
+        //TODO CONNACK 1
         close(connfd);
         return;
     }
 
-    uint8_t connectionFlags = receivedCommunication[3 + protocolNameLength];
+    uint8_t connectionFlags = receivedCommunication[offset];
+    offset++;
 
     if(connectionFlags & 1){
         printf("Control reserved bit set. ClosingConnection.  [MQTT-3.1.2-3]\n");
@@ -146,8 +172,43 @@ void CONNECT(uint8_t flags, uint8_t* receivedCommunication, int remainingLength,
         }
     }
 
-    uint16_t keepAliveTime = (receivedCommunication[4 + protocolNameLength] << 8) | (receivedCommunication[5 + protocolNameLength]);
+    uint16_t keepAliveTime = (receivedCommunication[offset] << 8) | (receivedCommunication[offset + 1]);
+    offset += 2;
     printf("Keep Alive time:%d\n", keepAliveTime);
+
+    utf8String* clientIdentifier = decodeUtf8String(&receivedCommunication[offset]);
+    offset += clientIdentifier->stringLength+2;
+    printf("ClientIdentifier:%s\n", clientIdentifier->string);
+
+    //TODO check clientidentifier and disconnect older if reused.
+
+    if(willFlag){
+        utf8String* willTopic = decodeUtf8String(&receivedCommunication[offset]);
+        offset+=willTopic->stringLength+2;
+
+        printf("Will Topic:%s\n", willTopic->string);
+
+        utf8String* willMessage = decodeUtf8String(&receivedCommunication[offset]); //Nao eh exatamente uma string mas serve vai
+        offset+= willMessage->stringLength+2;        
+
+        printf("Will Message:%s\n", willMessage->string);
+    }
+
+    if(userNameFlag){
+        utf8String* userName = decodeUtf8String(&receivedCommunication[offset]);
+        offset+= userName->stringLength+2;
+
+        printf("UserName: %s\n", userName->string);
+    }
+
+    if(passwordFlag){
+        utf8String* password = decodeUtf8String(&receivedCommunication[offset]);
+        offset+= password->stringLength+2;
+        
+        printf("Password: %s\n", password->string);
+    }
+
+
 
 }
 
