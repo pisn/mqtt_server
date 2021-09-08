@@ -43,10 +43,13 @@
 #define LISTENQ 1
 #define MAXDATASIZE 100
 #define MAXLINE 65000
+#define MAXTOPICS 200
 
 typedef struct {
     char* ClientIdentification;
     //botar tempo do keepAlive depois
+    char** interestedTopics;
+    uint interestedTopicsLength;
 
 } activeConnection;
 
@@ -106,11 +109,29 @@ void CONNACK(uint8_t returnCode, int connfd){
 
     responseStream[0] = 32;
     responseStream[1] = 2;
-    responseStream[2] = 0; //Por enquanto nao estou tratanto SessionPresent.
+    responseStream[2] = 0; //Por enquanto nao estou tratando SessionPresent.
     responseStream[3] = returnCode;
 
     printf("Writing CONNACK %d\n", returnCode);
     write(connfd, responseStream, 4);
+}
+
+void SUBACK(uint16_t packetIdentifier, uint8_t returnCodes[MAXTOPICS], uint returnCodeLength, int connfd){
+    uint8_t *responseStream = malloc((returnCodeLength + 4)*sizeof(uint8_t));
+
+    responseStream[0] = 144;
+    responseStream[1] = 2 + returnCodeLength;
+    responseStream[2] = packetIdentifier >> 8;
+    responseStream[3] = packetIdentifier & 15;    
+    
+    for(uint i=0; i<returnCodeLength; i++){
+        responseStream[4 + i] = returnCodes[i];
+    }
+
+    printf("Writing SUBACK\n");
+    write(connfd, responseStream, returnCodeLength + 4);
+
+    free(responseStream);    
 }
 
 void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
@@ -230,6 +251,75 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     CONNACK(0, connfd);
 }
 
+void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+    int offset = 0;
+
+    if(flags != 2){        
+        printf("Invalid flags! Close network connection. [MQTT-2.2.2-2]");
+        close(connfd);
+        return;
+    }
+
+    uint16_t packetIdentifier = (receivedCommunication[0] << 8) | (receivedCommunication[1]);    
+    printf("Packet Identifier: %d\n", packetIdentifier);
+    offset+=2;
+
+    uint8_t returnCodes[MAXTOPICS];
+    uint topicsCount =0;
+
+    while(remainingLength - offset>0){
+        printf("Offset: %d\n", offset);
+        printf("Remaining Length: %d\n", remainingLength);
+
+        utf8String *topicString = decodeUtf8String(&receivedCommunication[offset]);
+        printf("Topic chosen:%s\n", topicString->string);
+        printf("Topic Length:%d\n", topicString->stringLength);
+        offset+=2 + topicString->stringLength;
+
+        uint8_t qos = receivedCommunication[offset];
+        offset++;
+
+        if((qos >> 2) > 0){
+            printf("Malformed QoS. Closing connection [MQTT-3-8.3-4]\n");
+            close(connfd);
+        }
+
+        printf("QoS: %d\n", qos);
+        
+        //Por enquanto, implementando somente QoS 0. Se nao for QoS 0 retronar SUBACK Failure
+        if(qos == 0){
+        
+            uint replace = 0;
+            for(uint j=0;j<connection->interestedTopicsLength; j++){
+                if(strcmp(connection->interestedTopics[j],topicString->string) == 0){
+                    printf("Topic was already subscribed. Replace.");
+                    replace=1;
+                    break;
+                }
+            }
+
+            if(!replace){
+                printf("Subscribing to new topic.\n");
+                connection->interestedTopics[connection->interestedTopicsLength] = malloc(topicString->stringLength * sizeof(char));
+
+                strncpy(connection->interestedTopics[connection->interestedTopicsLength], topicString->string, topicString->stringLength);
+                (connection->interestedTopicsLength)++;                
+            }
+
+            returnCodes[topicsCount] = 0;
+            topicsCount++;
+        }
+        else {
+            returnCodes[topicsCount] = 128; //failure
+            topicsCount++;
+        }
+    }
+
+    SUBACK(packetIdentifier, returnCodes, topicsCount, connfd);
+
+}
+
+
 int main (int argc, char **argv) {
     /* Os sockets. Um que será o socket que vai escutar pelas conexões
      * e o outro que vai ser o socket específico de cada conexão */
@@ -322,6 +412,8 @@ int main (int argc, char **argv) {
             printf("[Uma conexão aberta]\n");
 
             activeConnection* connection = malloc(sizeof(activeConnection));
+            connection->interestedTopicsLength = 0;
+            connection->interestedTopics = malloc(MAXTOPICS*sizeof(char*));
 
             /* Já que está no processo filho, não precisa mais do socket
              * listenfd. Só o processo pai precisa deste socket. */
@@ -377,7 +469,8 @@ int main (int argc, char **argv) {
                         printf("PUBCOMP control packet type\n");                    
                         break;
                     case 8:
-                        printf("SUBSCRIBE control packet type\n");                    
+                        printf("SUBSCRIBE control packet type\n"); 
+                        SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
                         break;
                     case 10:
                         printf("UNSUBSCRIBE control packet type\n");                    
