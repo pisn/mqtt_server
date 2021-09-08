@@ -45,6 +45,12 @@
 #define MAXLINE 65000
 
 typedef struct {
+    char* ClientIdentification;
+    //botar tempo do keepAlive depois
+
+} activeConnection;
+
+typedef struct {
     int remainingLength, multiplierOffset;
 } remainingLengthStruct;
 
@@ -95,7 +101,7 @@ utf8String* decodeUtf8String(uint8_t* utf8EncodedStream){
     return returnString;
 }
 
-void CONNECT(uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
     int offset = 0;
 
     if(flags != 0){        
@@ -208,8 +214,7 @@ void CONNECT(uint8_t flags, uint8_t* receivedCommunication, int remainingLength,
         printf("Password: %s\n", password->string);
     }
 
-
-
+    connection->ClientIdentification=clientIdentifier->string;
 }
 
 int main (int argc, char **argv) {
@@ -302,6 +307,9 @@ int main (int argc, char **argv) {
         if ( (childpid = fork()) == 0) {
             /**** PROCESSO FILHO ****/
             printf("[Uma conexão aberta]\n");
+
+            activeConnection* connection = malloc(sizeof(activeConnection));
+
             /* Já que está no processo filho, não precisa mais do socket
              * listenfd. Só o processo pai precisa deste socket. */
             close(listenfd);
@@ -338,7 +346,7 @@ int main (int argc, char **argv) {
                 {
                     case 1:
                         printf("CONNECT control packet type\n");          
-                        CONNECT(flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
+                        CONNECT(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
                         break;
                     case 3:
                         printf("PUBLISH control packet type\n");                    
