@@ -101,6 +101,18 @@ utf8String* decodeUtf8String(uint8_t* utf8EncodedStream){
     return returnString;
 }
 
+void CONNACK(uint8_t returnCode, int connfd){
+    uint8_t responseStream[4]; //CONNACK tem tamanho fixo, nao tem payload
+
+    responseStream[0] = 32;
+    responseStream[1] = 2;
+    responseStream[2] = 0; //Por enquanto nao estou tratanto SessionPresent.
+    responseStream[3] = returnCode;
+
+    printf("Writing CONNACK %d\n", returnCode);
+    write(connfd, responseStream, 4);
+}
+
 void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
     int offset = 0;
 
@@ -133,7 +145,7 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
 
     if(protocolLevel != 4){
         printf("Unrecognized protocol level %d. [MQTT-3.1.2-2]", protocolLevel);
-        //TODO CONNACK 1
+        CONNACK(1, connfd);
         close(connfd);
         return;
     }
@@ -184,9 +196,7 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
 
     utf8String* clientIdentifier = decodeUtf8String(&receivedCommunication[offset]);
     offset += clientIdentifier->stringLength+2;
-    printf("ClientIdentifier:%s\n", clientIdentifier->string);
-
-    //TODO check clientidentifier and disconnect older if reused.
+    printf("ClientIdentifier:%s\n", clientIdentifier->string);    
 
     if(willFlag){
         utf8String* willTopic = decodeUtf8String(&receivedCommunication[offset]);
@@ -213,8 +223,11 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
         
         printf("Password: %s\n", password->string);
     }
-
+    
+    //TODO check clientidentifier and disconnect older if reused.
     connection->ClientIdentification=clientIdentifier->string;
+
+    CONNACK(0, connfd);
 }
 
 int main (int argc, char **argv) {
