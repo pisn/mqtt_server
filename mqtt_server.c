@@ -120,6 +120,9 @@ void destroyMessageStorage(receivedMessagesCircularList *list){
     
     pthread_mutex_destroy(&storageLock);
 }
+
+receivedMessagesCircularList* messagesStorage;
+
 /******************************************************************************/
 
 remainingLengthStruct* decodeRemainingLength(uint8_t* remainingLengthStream) {
@@ -332,13 +335,11 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
     uint8_t returnCodes[MAXTOPICS];
     uint topicsCount =0;
 
-    while(remainingLength - offset>0){
-        printf("Offset: %d\n", offset);
-        printf("Remaining Length: %d\n", remainingLength);
+    while(remainingLength - offset>0){  
 
         utf8String *topicString = decodeUtf8String(&receivedCommunication[offset]);
         printf("Topic chosen:%s\n", topicString->string);
-        printf("Topic Length:%d\n", topicString->stringLength);
+
         offset+=2 + topicString->stringLength;
 
         uint8_t qos = receivedCommunication[offset];
@@ -367,7 +368,8 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
                 printf("Subscribing to new topic.\n");
                 connection->interestedTopics[connection->interestedTopicsLength] = malloc(topicString->stringLength * sizeof(char));
 
-                strncpy(connection->interestedTopics[connection->interestedTopicsLength], topicString->string, topicString->stringLength);
+                //strncpy(connection->interestedTopics[connection->interestedTopicsLength], topicString->string, topicString->stringLength);
+                connection->interestedTopics[connection->interestedTopicsLength] = topicString->string;
                 (connection->interestedTopicsLength)++;                
             }
 
@@ -378,14 +380,50 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
             returnCodes[topicsCount] = 128; //failure
             topicsCount++;
         }
-    }
-
+        
+        free(topicString);//the string itself pointer is still in use. Free only full structure.
+    }    
+    
     SUBACK(packetIdentifier, returnCodes, topicsCount, connfd);
-
 }
 
+void PUBLISH(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+    int offset=0;
 
-receivedMessagesCircularList* messagesStorage;
+    //uint8_t dupFlag = flags >> 3;
+    uint8_t qosLevel = (flags >> 1) & 3;
+    //uint8_t retain = flags & 1;
+
+    if(qosLevel == 3){
+        printf("Invalid QoS Level. Closing connection. [MQTT-3.3.1-4]");
+        close(connfd);
+        return;
+    }
+
+    //Deixando a implementacao do Retain para depois, se der tempo.
+
+    utf8String *topicString = decodeUtf8String(&receivedCommunication[offset]);
+    printf("Topic of the message:%s\n", topicString->string);
+    offset+=2 + topicString->stringLength;
+
+    int messageLength = remainingLength - offset;
+
+    receivedMessage* message = malloc(sizeof(receivedMessage));
+    
+    message->topicName = topicString->string;
+    message->topicLength = topicString->stringLength;
+
+    message->messageLength = messageLength; 
+    message->message = malloc(messageLength*sizeof(uint8_t));
+    
+    for(int i=0;i<message->messageLength;i++){        
+        (message->message)[i] = receivedCommunication[offset];
+        offset++;
+    }   
+    
+    addMessageToList(messagesStorage, message);        
+    free(topicString);    
+}
 
 typedef struct {    
     int connfd;    
@@ -431,7 +469,7 @@ void* connectedClient (void *arg){
                 break;
             case 3:
                 printf("PUBLISH control packet type\n");                    
-                SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
+                PUBLISH(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
                 break;
             case 4:
                 printf("PUBACK control packet type\n");                    
@@ -461,7 +499,7 @@ void* connectedClient (void *arg){
             default:
                 printf("Unrecognized communication client to server: %d \n", packetType);                    
                 break;
-        }
+        }       
 
     }    
     
