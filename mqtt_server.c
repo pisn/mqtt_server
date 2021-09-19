@@ -54,6 +54,8 @@ typedef struct {
     char** interestedTopics;
     uint interestedTopicsLength;
     uint currentHead;
+    int connfd;
+    int stopSignal;
 } activeConnection;
 
 typedef struct {
@@ -78,10 +80,9 @@ typedef struct {
 
 pthread_mutex_t storageLock;
 
-receivedMessagesCircularList* createMessagesStorage(){
-    printf("Mutex create\n");
+receivedMessagesCircularList* createMessagesStorage(){    
     pthread_mutex_init(&storageLock, NULL);
-    printf("Mutex created\n");
+    
     receivedMessagesCircularList* list = malloc(sizeof(receivedMessagesCircularList));
     list->history = malloc(MAXMESSAGESHISTORY*sizeof(receivedMessage*));
     list->head=0;
@@ -429,11 +430,38 @@ typedef struct {
     int connfd;    
 }  clientArgs;
 
-void* connectedClient (void *arg){
+void* connectedClientNotifier(void *args){
+    activeConnection* clientConnection = (activeConnection*) args;
+    int internalMessageIndex = messagesStorage->head;
+
+    for(;;){
+        printf("Check for messages\n");
+        if(clientConnection->stopSignal != 0){
+            return NULL; //listener is waiting for this thread to finish.
+        }
+
+        if(messagesStorage->head != internalMessageIndex){
+            internalMessageIndex = (internalMessageIndex + 1) % MAXMESSAGESHISTORY;
+            receivedMessage* message = messagesStorage->history[internalMessageIndex];
+            
+            for(int i=0; i<clientConnection->interestedTopicsLength; i++){
+                if (strcmp(message->topicName, clientConnection->interestedTopics[i])==0){
+                    printf("Client is interested in this topic. Publish this message\n");
+                }
+            }
+        }
+        sleep(1); 
+    }
+}
+
+void* connectedClientListen (void *arg){
     //Buffer de entrada das mensagens
     uint8_t  receivedCommunication[MAXLINE + 1];
     //tamanho da mensagem
     ssize_t n;
+    //Listener thread
+    pthread_t listenerThread;
+
 
     /**** PROCESSO FILHO ****/
     printf("[Uma conexão aberta]\n");
@@ -443,11 +471,11 @@ void* connectedClient (void *arg){
     connection->interestedTopicsLength = 0;
     connection->interestedTopics = malloc(MAXTOPICS*sizeof(char*));
     connection->currentHead=0;
+    connection->connfd=args->connfd;   
+    connection->stopSignal = 0; 
 
-    /* Já que está no processo filho, não precisa mais do socket
-        * listenfd. Só o processo pai precisa deste socket. */    
-    //close(listenfd); Acho que nao preciso mais fechar o socket dado que existe somente um processo   
-    
+    pthread_create(&listenerThread, NULL, connectedClientNotifier, connection);   
+       
     
     while ((n=read(args->connfd, receivedCommunication, MAXLINE)) > 0) {
         
@@ -501,7 +529,11 @@ void* connectedClient (void *arg){
                 break;
         }       
 
-    }    
+    }
+
+    connection->stopSignal = 1;    
+
+    pthread_join(listenerThread, NULL);
     
     printf("[Uma conexão fechada]\n");
     return NULL;
@@ -577,7 +609,8 @@ int main (int argc, char **argv) {
          * utilizar a função accept. Esta função vai retirar uma conexão
          * da fila de conexões que foram aceitas no socket listenfd e
          * vai criar um socket específico para esta conexão. O descritor
-         * deste novo socket é o retorno da função accept. */        
+         * deste novo socket é o retorno da função accept. */ 
+               
         if ((connfd = accept(listenfd, (struct sockaddr *) NULL, NULL)) == -1 ) {
             perror("accept :(\n");
             exit(5);
@@ -587,7 +620,7 @@ int main (int argc, char **argv) {
         clientArgs* args = malloc(sizeof(clientArgs));
         args->connfd = connfd;
 
-        pthread_create(&(threads[subscriptions]), NULL, connectedClient, args);                        
+        pthread_create(&(threads[subscriptions]), NULL, connectedClientListen, args);                        
     }
 
     exit(0);
