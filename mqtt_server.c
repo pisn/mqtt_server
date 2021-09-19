@@ -388,7 +388,7 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
     SUBACK(packetIdentifier, returnCodes, topicsCount, connfd);
 }
 
-void PUBLISH(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+void PUBLISH_RECEIVE(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
     int offset=0;
 
     //uint8_t dupFlag = flags >> 3;
@@ -423,7 +423,35 @@ void PUBLISH(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     }   
     
     addMessageToList(messagesStorage, message);        
-    free(topicString);    
+    free(topicString);  
+
+    //Como ep nao precisa ser implementado para QoS maior que 0, nao vou responder  
+}
+
+void PUBLISH_NOTIFY(activeConnection *connection, receivedMessage* message){
+    int fullSize = message->messageLength + message->topicLength + 2 + 2; //full size is message size + topicLength + topic utf8 header (2 bytes) + FixedHeader (2 bytes)    
+
+    uint8_t* fullMessage = malloc(fullSize*sizeof(uint8_t));
+    fullMessage[0] = 48;
+    fullMessage[1] = fullSize - 2;
+    fullMessage[2] = message->topicLength >> 8;
+    fullMessage[3] = message->topicLength & 255;
+
+    int offset = 4;
+
+    for(int i=0; i<message->topicLength; i++){
+        fullMessage[4+i] = (uint8_t) message->topicName[i];
+        offset++;
+    }
+
+    for(int i=0; i< message->messageLength; i++){
+        fullMessage[offset+i] = message->message[i];        
+    }
+
+    printf("Notifing client\n");
+    write(connection->connfd, fullMessage, fullSize);
+
+    free(fullMessage);    
 }
 
 typedef struct {    
@@ -434,8 +462,7 @@ void* connectedClientNotifier(void *args){
     activeConnection* clientConnection = (activeConnection*) args;
     int internalMessageIndex = messagesStorage->head;
 
-    for(;;){
-        printf("Check for messages\n");
+    for(;;){        
         if(clientConnection->stopSignal != 0){
             return NULL; //listener is waiting for this thread to finish.
         }
@@ -446,7 +473,8 @@ void* connectedClientNotifier(void *args){
             
             for(int i=0; i<clientConnection->interestedTopicsLength; i++){
                 if (strcmp(message->topicName, clientConnection->interestedTopics[i])==0){
-                    printf("Client is interested in this topic. Publish this message\n");
+                    printf("Client is interested in this topic. Publishing message\n");
+                    PUBLISH_NOTIFY(clientConnection, message);
                 }
             }
         }
@@ -497,7 +525,7 @@ void* connectedClientListen (void *arg){
                 break;
             case 3:
                 printf("PUBLISH control packet type\n");                    
-                PUBLISH(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
+                PUBLISH_RECEIVE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
                 break;
             case 4:
                 printf("PUBACK control packet type\n");                    
