@@ -39,13 +39,14 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <unistd.h>
-#include <sys/mman.h>
+#include <pthread.h>
 
 #define LISTENQ 1
 #define MAXDATASIZE 100
 #define MAXMESSAGESHISTORY 100
 #define MAXLINE 65000
 #define MAXTOPICS 200
+#define MAXSUBSCRIPTIONS 200
 
 typedef struct {
     char* ClientIdentification;
@@ -60,7 +61,7 @@ typedef struct {
 } remainingLengthStruct;
 
 /******************* Received messages storage ******************************/
-
+/*
 typedef struct {
     uint messageLength;
     uint topicLength;
@@ -91,7 +92,7 @@ void addMessageToList(receivedMessagesCircularList* list, receivedMessage* messa
 receivedMessage *getReceivedMessage(receivedMessagesCircularList *list, uint index){
     return list->history[index];
 }
-
+*/
 
 //TODO create function to free this structure
 /******************************************************************************/
@@ -359,22 +360,100 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
 }
 
 
+typedef struct {    
+    int connfd;
+}  clientArgs;
+
+void* connectedClient (void *arg){
+    //Buffer de entrada das mensagens
+    uint8_t  receivedCommunication[MAXLINE + 1];
+    //tamanho da mensagem
+    ssize_t n;
+
+    /**** PROCESSO FILHO ****/
+    printf("[Uma conexão aberta]\n");
+    clientArgs *args = (clientArgs*) arg;
+
+    activeConnection* connection = malloc(sizeof(activeConnection));
+    connection->interestedTopicsLength = 0;
+    connection->interestedTopics = malloc(MAXTOPICS*sizeof(char*));
+    connection->currentHead=0;
+
+    /* Já que está no processo filho, não precisa mais do socket
+        * listenfd. Só o processo pai precisa deste socket. */    
+    //close(listenfd); Acho que nao preciso mais fechar o socket dado que existe somente um processo   
+    
+    
+    while ((n=read(args->connfd, receivedCommunication, MAXLINE)) > 0) {
+        
+        //fixedHeader
+        uint8_t control = receivedCommunication[0];                
+        remainingLengthStruct* remainingLength = decodeRemainingLength(&receivedCommunication[1]);
+
+        printf("Remaining Length:%d\n", remainingLength->remainingLength);
+        printf("Multiplier offset:%d\n", remainingLength->multiplierOffset);
+
+        uint8_t packetType = control >> 4;
+        uint8_t flags = control & 15;                
+
+        switch (packetType)
+        {
+            case 1:
+                printf("CONNECT control packet type\n");          
+                CONNECT(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
+                break;
+            case 3:
+                printf("PUBLISH control packet type\n");                    
+                SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
+                break;
+            case 4:
+                printf("PUBACK control packet type\n");                    
+                break;
+            case 5:
+                printf("PUBREC control packet type\n");                    
+                break;
+            case 6:
+                printf("PUBREL control packet type\n");                    
+                break;
+            case 7:
+                printf("PUBCOMP control packet type\n");                    
+                break;
+            case 8:
+                printf("SUBSCRIBE control packet type\n"); 
+                SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
+                break;
+            case 10:
+                printf("UNSUBSCRIBE control packet type\n");                    
+                break;
+            case 12:
+                printf("PINGREQ control packet type\n");                    
+                break;
+            case 14:
+                printf("DISCONNECT control packet type\n");                    
+                break;
+            default:
+                printf("Unrecognized communication client to server: %d \n", packetType);                    
+                break;
+        }
+
+    }    
+    
+    printf("[Uma conexão fechada]\n");
+    return NULL;
+}
+
 int main (int argc, char **argv) {
     /* Os sockets. Um que será o socket que vai escutar pelas conexões
      * e o outro que vai ser o socket específico de cada conexão */
     int listenfd, connfd;
     /* Informações sobre o socket (endereço e porta) ficam nesta struct */
-    struct sockaddr_in servaddr;
-    /* Retorno da função fork para saber quem é o processo filho e
-     * quem é o processo pai */
-    pid_t childpid;
-    /* Armazena linhas recebidas do cliente */
-    uint8_t  receivedCommunication[MAXLINE + 1];
-
-    ssize_t n;
+    struct sockaddr_in servaddr;          
     
+    //Estrutura de threads
+    pthread_t threads[MAXSUBSCRIPTIONS];
+    int subscriptions=0;
     //Lista circular compartilhada entre todos os processos
-    receivedMessagesCircularList* messagesStorage = createMessagesStorage();
+    //receivedMessagesCircularList* messagesStorage = createMessagesStorage();
    
     if (argc != 2) {
         fprintf(stderr,"Uso: %s <Porta>\n",argv[0]);
@@ -433,121 +512,17 @@ int main (int argc, char **argv) {
          * utilizar a função accept. Esta função vai retirar uma conexão
          * da fila de conexões que foram aceitas no socket listenfd e
          * vai criar um socket específico para esta conexão. O descritor
-         * deste novo socket é o retorno da função accept. */
+         * deste novo socket é o retorno da função accept. */        
         if ((connfd = accept(listenfd, (struct sockaddr *) NULL, NULL)) == -1 ) {
             perror("accept :(\n");
             exit(5);
         }
       
-        /* Agora o servidor precisa tratar este cliente de forma
-         * separada. Para isto é criado um processo filho usando a
-         * função fork. O processo vai ser uma cópia deste. Depois da
-         * função fork, os dois processos (pai e filho) estarão no mesmo
-         * ponto do código, mas cada um terá um PID diferente. Assim é
-         * possível diferenciar o que cada processo terá que fazer. O
-         * filho tem que processar a requisição do cliente. O pai tem
-         * que voltar no loop para continuar aceitando novas conexões.
-         * Se o retorno da função fork for zero, é porque está no
-         * processo filho. */
-        if ( (childpid = fork()) == 0) {
-            /**** PROCESSO FILHO ****/
-            printf("[Uma conexão aberta]\n");
+        subscriptions++;
+        clientArgs* args = malloc(sizeof(clientArgs));
+        args->connfd = connfd;
 
-            activeConnection* connection = malloc(sizeof(activeConnection));
-            connection->interestedTopicsLength = 0;
-            connection->interestedTopics = malloc(MAXTOPICS*sizeof(char*));
-            connection->currentHead=0;
-
-            /* Já que está no processo filho, não precisa mais do socket
-             * listenfd. Só o processo pai precisa deste socket. */
-            close(listenfd);
-         
-            /* Agora pode ler do socket e escrever no socket. Isto tem
-             * que ser feito em sincronia com o cliente. Não faz sentido
-             * ler sem ter o que ler. Ou seja, neste caso está sendo
-             * considerado que o cliente vai enviar algo para o servidor.
-             * O servidor vai processar o que tiver sido enviado e vai
-             * enviar uma resposta para o cliente (Que precisará estar
-             * esperando por esta resposta) 
-             */
-
-            /* ========================================================= */
-            /* ========================================================= */
-            /*                         EP1 INÍCIO                        */
-            /* ========================================================= */
-            /* ========================================================= */
-            /* TODO: É esta parte do código que terá que ser modificada
-             * para que este servidor consiga interpretar comandos MQTT  */
-            while ((n=read(connfd, receivedCommunication, MAXLINE)) > 0) {
-                
-                //fixedHeader
-                uint8_t control = receivedCommunication[0];                
-                remainingLengthStruct* remainingLength = decodeRemainingLength(&receivedCommunication[1]);
-
-                printf("Remaining Length:%d\n", remainingLength->remainingLength);
-                printf("Multiplier offset:%d\n", remainingLength->multiplierOffset);
-
-                uint8_t packetType = control >> 4;
-                uint8_t flags = control & 15;                
-
-                switch (packetType)
-                {
-                    case 1:
-                        printf("CONNECT control packet type\n");          
-                        CONNECT(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
-                        break;
-                    case 3:
-                        printf("PUBLISH control packet type\n");                    
-                        SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
-                        break;
-                    case 4:
-                        printf("PUBACK control packet type\n");                    
-                        break;
-                    case 5:
-                        printf("PUBREC control packet type\n");                    
-                        break;
-                    case 6:
-                        printf("PUBREL control packet type\n");                    
-                        break;
-                    case 7:
-                        printf("PUBCOMP control packet type\n");                    
-                        break;
-                    case 8:
-                        printf("SUBSCRIBE control packet type\n"); 
-                        SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
-                        break;
-                    case 10:
-                        printf("UNSUBSCRIBE control packet type\n");                    
-                        break;
-                    case 12:
-                        printf("PINGREQ control packet type\n");                    
-                        break;
-                    case 14:
-                        printf("DISCONNECT control packet type\n");                    
-                        break;
-                    default:
-                        printf("Unrecognized communication client to server: %d \n", packetType);                    
-                        break;
-                }
-
-            }
-            /* ========================================================= */
-            /* ========================================================= */
-            /*                         EP1 FIM                           */
-            /* ========================================================= */
-            /* ========================================================= */
-
-            /* Após ter feito toda a troca de informação com o cliente,
-             * pode finalizar o processo filho */
-            printf("[Uma conexão fechada]\n");
-            exit(0);
-        }
-        else
-            /**** PROCESSO PAI ****/
-            /* Se for o pai, a única coisa a ser feita é fechar o socket
-             * connfd (ele é o socket do cliente específico que será tratado
-             * pelo processo filho) */
-            close(connfd);
+        pthread_create(&(threads[subscriptions]), NULL, connectedClient, args);                        
     }
     exit(0);
 }
