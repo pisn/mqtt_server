@@ -39,9 +39,11 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #define LISTENQ 1
 #define MAXDATASIZE 100
+#define MAXMESSAGESHISTORY 100
 #define MAXLINE 65000
 #define MAXTOPICS 200
 
@@ -50,12 +52,49 @@ typedef struct {
     //botar tempo do keepAlive depois
     char** interestedTopics;
     uint interestedTopicsLength;
-
+    uint currentHead;
 } activeConnection;
 
 typedef struct {
     int remainingLength, multiplierOffset;
 } remainingLengthStruct;
+
+/******************* Received messages storage ******************************/
+
+typedef struct {
+    uint messageLength;
+    uint topicLength;
+    
+    u_int8_t* message;
+    char* topicName;
+} receivedMessage;
+
+typedef struct {
+    receivedMessage** history;
+    uint head;
+} receivedMessagesCircularList;
+
+receivedMessagesCircularList* createMessagesStorage(){
+    //receivedMessagesCircularList* list = malloc(sizeof(receivedMessagesCircularList));
+    receivedMessagesCircularList* list = mmap(NULL, sizeof(receivedMessagesCircularList), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    list->history = malloc(MAXMESSAGESHISTORY*sizeof(receivedMessage*));
+    list->head=0;
+
+    return list;
+}
+
+void addMessageToList(receivedMessagesCircularList* list, receivedMessage* message){    
+    list->head = (list->head + 1)%MAXMESSAGESHISTORY;    
+    list->history[list->head] = message;        
+}
+
+receivedMessage *getReceivedMessage(receivedMessagesCircularList *list, uint index){
+    return list->history[index];
+}
+
+
+//TODO create function to free this structure
+/******************************************************************************/
 
 remainingLengthStruct* decodeRemainingLength(uint8_t* remainingLengthStream) {
     int multiplier = 1;
@@ -331,8 +370,11 @@ int main (int argc, char **argv) {
     pid_t childpid;
     /* Armazena linhas recebidas do cliente */
     uint8_t  receivedCommunication[MAXLINE + 1];
-    /* Armazena o tamanho da string lida do cliente */
+
     ssize_t n;
+    
+    //Lista circular compartilhada entre todos os processos
+    receivedMessagesCircularList* messagesStorage = createMessagesStorage();
    
     if (argc != 2) {
         fprintf(stderr,"Uso: %s <Porta>\n",argv[0]);
@@ -414,6 +456,7 @@ int main (int argc, char **argv) {
             activeConnection* connection = malloc(sizeof(activeConnection));
             connection->interestedTopicsLength = 0;
             connection->interestedTopics = malloc(MAXTOPICS*sizeof(char*));
+            connection->currentHead=0;
 
             /* Já que está no processo filho, não precisa mais do socket
              * listenfd. Só o processo pai precisa deste socket. */
@@ -455,6 +498,7 @@ int main (int argc, char **argv) {
                         break;
                     case 3:
                         printf("PUBLISH control packet type\n");                    
+                        SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, connfd);
                         break;
                     case 4:
                         printf("PUBACK control packet type\n");                    
