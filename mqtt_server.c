@@ -61,7 +61,7 @@ typedef struct {
 } remainingLengthStruct;
 
 /******************* Received messages storage ******************************/
-/*
+
 typedef struct {
     uint messageLength;
     uint topicLength;
@@ -73,11 +73,16 @@ typedef struct {
 typedef struct {
     receivedMessage** history;
     uint head;
+    uint totalCount;
 } receivedMessagesCircularList;
 
+pthread_mutex_t storageLock;
+
 receivedMessagesCircularList* createMessagesStorage(){
-    //receivedMessagesCircularList* list = malloc(sizeof(receivedMessagesCircularList));
-    receivedMessagesCircularList* list = mmap(NULL, sizeof(receivedMessagesCircularList), PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    printf("Mutex create\n");
+    pthread_mutex_init(&storageLock, NULL);
+    printf("Mutex created\n");
+    receivedMessagesCircularList* list = malloc(sizeof(receivedMessagesCircularList));
     list->history = malloc(MAXMESSAGESHISTORY*sizeof(receivedMessage*));
     list->head=0;
 
@@ -85,16 +90,36 @@ receivedMessagesCircularList* createMessagesStorage(){
 }
 
 void addMessageToList(receivedMessagesCircularList* list, receivedMessage* message){    
-    list->head = (list->head + 1)%MAXMESSAGESHISTORY;    
-    list->history[list->head] = message;        
+    pthread_mutex_lock(&storageLock);
+    
+    list->head = (list->head + 1)%MAXMESSAGESHISTORY; 
+    (list->totalCount)++;   
+    list->history[list->head] = message;      
+
+    pthread_mutex_unlock(&storageLock);
 }
 
 receivedMessage *getReceivedMessage(receivedMessagesCircularList *list, uint index){
     return list->history[index];
 }
-*/
 
-//TODO create function to free this structure
+
+void destroyMessageStorage(receivedMessagesCircularList *list){
+    int positionsToBeFreed = MAXMESSAGESHISTORY;
+
+    if(list->totalCount < positionsToBeFreed){
+        positionsToBeFreed = list->totalCount;
+    }
+
+    for(int i=0;i<positionsToBeFreed;i++){
+        free((list->history[i])->message);
+        free((list->history[i])->topicName);        
+    }        
+    free(list->history);    
+    free(list);
+    
+    pthread_mutex_destroy(&storageLock);
+}
 /******************************************************************************/
 
 remainingLengthStruct* decodeRemainingLength(uint8_t* remainingLengthStream) {
@@ -360,8 +385,10 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
 }
 
 
+receivedMessagesCircularList* messagesStorage;
+
 typedef struct {    
-    int connfd;
+    int connfd;    
 }  clientArgs;
 
 void* connectedClient (void *arg){
@@ -452,9 +479,9 @@ int main (int argc, char **argv) {
     //Estrutura de threads
     pthread_t threads[MAXSUBSCRIPTIONS];
     int subscriptions=0;
-    //Lista circular compartilhada entre todos os processos
-    //receivedMessagesCircularList* messagesStorage = createMessagesStorage();
-   
+    //Lista circular compartilhada entre todos os processos    
+    messagesStorage = createMessagesStorage();   
+    
     if (argc != 2) {
         fprintf(stderr,"Uso: %s <Porta>\n",argv[0]);
         fprintf(stderr,"Vai rodar um servidor de echo na porta <Porta> TCP\n");
@@ -524,5 +551,6 @@ int main (int argc, char **argv) {
 
         pthread_create(&(threads[subscriptions]), NULL, connectedClient, args);                        
     }
+
     exit(0);
 }
