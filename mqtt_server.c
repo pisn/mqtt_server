@@ -320,6 +320,21 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     CONNACK(0, connfd);
 }
 
+void PINGRESP(int connfd){
+    uint8_t responseStream[2]; //CONNACK tem tamanho fixo, nao tem payload
+
+    responseStream[0] = 208;
+    responseStream[1] = 0;    
+    
+    write(connfd, responseStream, 2);
+}
+
+void PINGREQ(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+
+    printf("Sending PINGRESP back o client\n");
+    PINGRESP(connfd);
+}
+
 void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
     int offset = 0;
 
@@ -547,7 +562,8 @@ void* connectedClientListen (void *arg){
                 printf("UNSUBSCRIBE control packet type\n");                    
                 break;
             case 12:
-                printf("PINGREQ control packet type\n");                    
+                printf("PINGREQ control packet type\n");       
+                PINGREQ(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
                 break;
             case 14:
                 printf("DISCONNECT control packet type\n");                    
