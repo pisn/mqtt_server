@@ -19,6 +19,8 @@
 #define MAXTOPICS 200
 #define MAXSUBSCRIPTIONS 200
 
+int verbose;
+
 typedef struct {
     char* ClientIdentification;
     //botar tempo do keepAlive depois
@@ -133,7 +135,9 @@ typedef struct {
 
 utf8String* decodeUtf8String(uint8_t* utf8EncodedStream){
     uint16_t stringLength = (utf8EncodedStream[0] << 8) | utf8EncodedStream[1];
-    printf("Size:%d\n", stringLength);
+    
+    if(verbose)
+        printf("UTF8 string Size:%d\n", stringLength);
 
     utf8String* returnString = malloc(sizeof(utf8String));
     returnString->stringLength = stringLength;
@@ -158,7 +162,9 @@ void CONNACK(uint8_t returnCode, int connfd){
     responseStream[2] = 0; //Por enquanto nao estou tratando SessionPresent.
     responseStream[3] = returnCode;
 
-    printf("Writing CONNACK %d\n", returnCode);
+    if(verbose)
+        printf("Writing CONNACK %d\n", returnCode);
+
     write(connfd, responseStream, 4);
 }
 
@@ -174,7 +180,9 @@ void SUBACK(uint16_t packetIdentifier, uint8_t returnCodes[MAXTOPICS], uint retu
         responseStream[4 + i] = returnCodes[i];
     }
 
-    printf("Writing SUBACK\n");
+    if(verbose)
+        printf("Writing SUBACK\n");
+
     write(connfd, responseStream, returnCodeLength + 4);
 
     free(responseStream);    
@@ -212,7 +220,8 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     }
     offset += protocolNameLength;
 
-    printf("Protocol Name:%s\n", protocolName);
+    if(verbose)
+        printf("Protocol Name:%s\n", protocolName);
 
     if(strcmp(protocolName,"MQTT") != 0){
         printf("Unrecognized protocol. Closing connection. [MQTT-3.1.2-1]\n");
@@ -224,7 +233,7 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     offset++;
 
     if(protocolLevel != 4){
-        printf("Unrecognized protocol level %d. [MQTT-3.1.2-2]", protocolLevel);
+        printf("Unrecognized protocol level %d. [MQTT-3.1.2-2]\n", protocolLevel);
         CONNACK(1, connfd);
         close(connfd);
         return;
@@ -245,13 +254,17 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     uint willQoS, willRetain;
 
     if(willFlag){
-        printf("Will flag set.\n");
+        if(verbose)
+            printf("Will flag set.\n");
 
         willQoS = connectionFlags & 24;
         willRetain = connectionFlags & 32;
 
-        printf("Will quality of service: %d\n", willQoS);
-        printf("Will Retain: %d\n", willRetain);
+        if(verbose){
+            printf("Will quality of service: %d\n", willQoS);
+            printf("Will Retain: %d\n", willRetain);    
+        }
+        
     }
     else {
         willQoS = 0;
@@ -262,46 +275,56 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     uint passwordFlag = 0;
 
     if(userNameFlag){
-        printf("Username flag set\n");
+        if(verbose)
+            printf("Username flag set\n");
 
         passwordFlag = connectionFlags & 64;
         if(passwordFlag){
-            printf("Password flag set\n");
+            if(verbose)
+                printf("Password flag set\n");
         }
     }
 
     uint16_t keepAliveTime = (receivedCommunication[offset] << 8) | (receivedCommunication[offset + 1]);
     offset += 2;
-    printf("Keep Alive time:%d\n", keepAliveTime);
+
+    if(verbose)
+        printf("Keep Alive time:%d\n", keepAliveTime);
 
     utf8String* clientIdentifier = decodeUtf8String(&receivedCommunication[offset]);
     offset += clientIdentifier->stringLength+2;
-    printf("ClientIdentifier:%s\n", clientIdentifier->string);    
+
+    if(verbose)
+        printf("ClientIdentifier:%s\n", clientIdentifier->string);    
 
     if(willFlag){
         utf8String* willTopic = decodeUtf8String(&receivedCommunication[offset]);
         offset+=willTopic->stringLength+2;
 
-        printf("Will Topic:%s\n", willTopic->string);
+        if(verbose)
+            printf("Will Topic:%s\n", willTopic->string);
 
         utf8String* willMessage = decodeUtf8String(&receivedCommunication[offset]); //Nao eh exatamente uma string mas serve vai
         offset+= willMessage->stringLength+2;        
 
-        printf("Will Message:%s\n", willMessage->string);
+        if(verbose)
+            printf("Will Message:%s\n", willMessage->string);
     }
 
     if(userNameFlag){
         utf8String* userName = decodeUtf8String(&receivedCommunication[offset]);
         offset+= userName->stringLength+2;
 
-        printf("UserName: %s\n", userName->string);
+        if(verbose)
+            printf("UserName: %s\n", userName->string);
     }
 
     if(passwordFlag){
         utf8String* password = decodeUtf8String(&receivedCommunication[offset]);
         offset+= password->stringLength+2;
         
-        printf("Password: %s\n", password->string);
+        if(verbose)
+            printf("Password: %s\n", password->string);
     }
     
     //TODO check clientidentifier and disconnect older if reused.
@@ -311,8 +334,9 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
 }
 
 void PINGREQ(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
+    if(verbose)
+        printf("Sending PINGRESP back o client\n");
 
-    printf("Sending PINGRESP back o client\n");
     PINGRESP(connfd);
 }
 
@@ -320,13 +344,16 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
     int offset = 0;
 
     if(flags != 2){        
-        printf("Invalid flags! Close network connection. [MQTT-2.2.2-2]");
+        printf("Invalid flags! Close network connection. [MQTT-2.2.2-2]\n");
         close(connfd);
         return;
     }
 
     uint16_t packetIdentifier = (receivedCommunication[0] << 8) | (receivedCommunication[1]);    
-    printf("Packet Identifier: %d\n", packetIdentifier);
+
+    if(verbose)
+        printf("Packet Identifier: %d\n", packetIdentifier);
+
     offset+=2;
 
     uint8_t returnCodes[MAXTOPICS];
@@ -335,7 +362,9 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
     while(remainingLength - offset>0){  
 
         utf8String *topicString = decodeUtf8String(&receivedCommunication[offset]);
-        printf("Topic chosen:%s\n", topicString->string);
+
+        if(verbose)
+            printf("Topic chosen:%s\n", topicString->string);
 
         offset+=2 + topicString->stringLength;
 
@@ -355,14 +384,17 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
             uint replace = 0;
             for(uint j=0;j<connection->interestedTopicsLength; j++){
                 if(strcmp(connection->interestedTopics[j],topicString->string) == 0){
-                    printf("Topic was already subscribed. Replace.");
+                    if(verbose)
+                        printf("Topic was already subscribed. Replace.\n");
                     replace=1;
                     break;
                 }
             }
 
             if(!replace){
-                printf("Subscribing to new topic.\n");
+                if(verbose)
+                    printf("Subscribing to new topic.\n");
+
                 connection->interestedTopics[connection->interestedTopicsLength] = malloc(topicString->stringLength * sizeof(char));
 
                 //strncpy(connection->interestedTopics[connection->interestedTopicsLength], topicString->string, topicString->stringLength);
@@ -392,7 +424,7 @@ void PUBLISH_RECEIVE(activeConnection *connection, uint8_t flags, uint8_t* recei
     //uint8_t retain = flags & 1;
 
     if(qosLevel == 3){
-        printf("Invalid QoS Level. Closing connection. [MQTT-3.3.1-4]");
+        printf("Invalid QoS Level. Closing connection. [MQTT-3.3.1-4]\n");
         close(connfd);
         return;
     }
@@ -400,7 +432,10 @@ void PUBLISH_RECEIVE(activeConnection *connection, uint8_t flags, uint8_t* recei
     //Deixando a implementacao do Retain para depois, se der tempo.
 
     utf8String *topicString = decodeUtf8String(&receivedCommunication[offset]);
-    printf("Topic of the message:%s\n", topicString->string);
+
+    if(verbose)
+        printf("Topic of the message:%s\n", topicString->string);
+
     offset+=2 + topicString->stringLength;
 
     int messageLength = remainingLength - offset;
@@ -444,7 +479,9 @@ void PUBLISH_NOTIFY(activeConnection *connection, receivedMessage* message){
         fullMessage[offset+i] = message->message[i];        
     }
 
-    printf("Notifing client\n");
+    if(verbose)
+        printf("Notifing client\n");
+
     write(connection->connfd, fullMessage, fullSize);
 
     free(fullMessage);    
@@ -472,7 +509,10 @@ void* connectedClientNotifier(void *args){
             
             for(int i=0; i<clientConnection->interestedTopicsLength; i++){
                 if (strcmp(message->topicName, clientConnection->interestedTopics[i])==0){
-                    printf("Client is interested in this topic. Publishing message\n");
+
+                    if(verbose)
+                        printf("Client is interested in this topic. Publishing message\n");
+
                     PUBLISH_NOTIFY(clientConnection, message);
                 }
             }
@@ -510,8 +550,11 @@ void* connectedClientListen (void *arg){
         uint8_t control = receivedCommunication[0];                
         remainingLengthStruct* remainingLength = decodeRemainingLength(&receivedCommunication[1]);
 
-        printf("Remaining Length:%d\n", remainingLength->remainingLength);
-        printf("Multiplier offset:%d\n", remainingLength->multiplierOffset);
+        if(verbose){
+            printf("Remaining Length:%d\n", remainingLength->remainingLength);
+            printf("Multiplier offset:%d\n", remainingLength->multiplierOffset);
+        }
+        
 
         uint8_t packetType = control >> 4;
         uint8_t flags = control & 15;                
@@ -519,41 +562,60 @@ void* connectedClientListen (void *arg){
         switch (packetType)
         {
             case 1:
-                printf("CONNECT control packet type\n");          
+                if(verbose)
+                    printf("CONNECT control packet type\n");          
+
                 CONNECT(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
                 break;
             case 3:
-                printf("PUBLISH control packet type\n");                    
+                if(verbose)
+                    printf("PUBLISH control packet type\n");                    
+
                 PUBLISH_RECEIVE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
                 break;
             case 4:
-                printf("PUBACK control packet type\n");                    
+                if(verbose)
+                    printf("PUBACK control packet type\n");                    
+
                 break;
             case 5:
-                printf("PUBREC control packet type\n");                    
+                if(verbose)
+                    printf("PUBREC control packet type\n");                    
+
                 break;
             case 6:
-                printf("PUBREL control packet type\n");                    
+                if(verbose)
+                    printf("PUBREL control packet type\n");                    
+
                 break;
             case 7:
-                printf("PUBCOMP control packet type\n");                    
+                if(verbose)
+                    printf("PUBCOMP control packet type\n");                    
+
                 break;
             case 8:
-                printf("SUBSCRIBE control packet type\n"); 
+                if(verbose)
+                    printf("SUBSCRIBE control packet type\n"); 
+
                 SUBSCRIBE(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
                 break;
             case 10:
-                printf("UNSUBSCRIBE control packet type\n");                    
+                if(verbose)
+                    printf("UNSUBSCRIBE control packet type\n");                    
+
                 break;
             case 12:
                 printf("PINGREQ control packet type\n");       
                 PINGREQ(connection, flags, &receivedCommunication[2+remainingLength->multiplierOffset], remainingLength->remainingLength, args->connfd);
                 break;
             case 14:
-                printf("DISCONNECT control packet type\n");                    
+                if(verbose)
+                    printf("DISCONNECT control packet type\n");                    
+
                 break;
             default:
-                printf("Unrecognized communication client to server: %d \n", packetType);                    
+                if(verbose)
+                    printf("Unrecognized communication client to server: %d \n", packetType);                    
                 break;
         }       
 
@@ -583,10 +645,19 @@ int main (int argc, char **argv) {
     //Lista circular compartilhada entre todos os processos    
     messagesStorage = createMessagesStorage();   
     
-    if (argc != 2) {
-        fprintf(stderr,"Uso: %s <Porta>\n",argv[0]);
+    if (argc != 2 && (argc != 3 && strcmp(argv[2], "-v") != 0) {
+        fprintf(stderr,"Uso: %s <Porta> [-v]\n",argv[0]);
         fprintf(stderr,"Vai rodar um servidor de echo na porta <Porta> TCP\n");
+        fprintf(stderr,"Opções:\n");
+        fprintf(stderr,"-v -> Modo verborrágico \n");
         exit(1);
+    }
+
+    if(argc == 3){
+        verbose=1;
+    }
+    else {
+        verbose=0;
     }
 
     /* Criação de um socket. É como se fosse um descritor de arquivo.
