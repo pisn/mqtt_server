@@ -1,33 +1,4 @@
-/* Por Prof. Daniel Batista <batista@ime.usp.br>
- * Em 4/4/2021
- * 
- * Um código simples de um servidor de eco a ser usado como base para
- * o EP1. Ele recebe uma linha de um cliente e devolve a mesma linha.
- * Teste ele assim depois de compilar:
- * 
- * ./mac5910-servidor-exemplo-ep1 8000
- * 
- * Com este comando o servidor ficará escutando por conexões na porta
- * 8000 TCP (Se você quiser fazer o servidor escutar em uma porta
- * menor que 1024 você precisará ser root ou ter as permissões
- * necessáfias para rodar o código com 'sudo').
- *
- * Depois conecte no servidor via telnet. Rode em outro terminal:
- * 
- * telnet 127.0.0.1 8000
- * 
- * Escreva sequências de caracteres seguidas de ENTER. Você verá que o
- * telnet exibe a mesma linha em seguida. Esta repetição da linha é
- * enviada pelo servidor. O servidor também exibe no terminal onde ele
- * estiver rodando as linhas enviadas pelos clientes.
- * 
- * Obs.: Você pode conectar no servidor remotamente também. Basta
- * saber o endereço IP remoto da máquina onde o servidor está rodando
- * e não pode haver nenhum firewall no meio do caminho bloqueando
- * conexões na porta escolhida.
- */
-
-#define _GNU_SOURCE
+?#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -126,6 +97,8 @@ receivedMessagesCircularList* messagesStorage;
 
 /******************************************************************************/
 
+/*****************Common functions for messages processing ********************/
+
 remainingLengthStruct* decodeRemainingLength(uint8_t* remainingLengthStream) {
     int multiplier = 1;
     int value = 0;
@@ -173,6 +146,10 @@ utf8String* decodeUtf8String(uint8_t* utf8EncodedStream){
     return returnString;
 }
 
+/************************************************************************/
+
+/**********************MESSAGES FOR SENDING PACKETS **********************/
+
 void CONNACK(uint8_t returnCode, int connfd){
     uint8_t responseStream[4]; //CONNACK tem tamanho fixo, nao tem payload
 
@@ -202,6 +179,19 @@ void SUBACK(uint16_t packetIdentifier, uint8_t returnCodes[MAXTOPICS], uint retu
 
     free(responseStream);    
 }
+
+void PINGRESP(int connfd){
+    uint8_t responseStream[2]; //CONNACK tem tamanho fixo, nao tem payload
+
+    responseStream[0] = 208;
+    responseStream[1] = 0;    
+    
+    write(connfd, responseStream, 2);
+}
+
+/**************************************************************************/
+
+/*********************RECEIVED MESSAGES FUNCTIONS *************************/
 
 void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
     int offset = 0;
@@ -318,15 +308,6 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
     connection->ClientIdentification=clientIdentifier->string;
 
     CONNACK(0, connfd);
-}
-
-void PINGRESP(int connfd){
-    uint8_t responseStream[2]; //CONNACK tem tamanho fixo, nao tem payload
-
-    responseStream[0] = 208;
-    responseStream[1] = 0;    
-    
-    write(connfd, responseStream, 2);
 }
 
 void PINGREQ(activeConnection *connection, uint8_t flags, uint8_t* receivedCommunication, int remainingLength, int connfd){
@@ -469,6 +450,9 @@ void PUBLISH_NOTIFY(activeConnection *connection, receivedMessage* message){
     free(fullMessage);    
 }
 
+/***********************************************************************************/
+/********************CLIENTS THREADS (Listener and Notifier *************************/
+
 typedef struct {    
     int connfd;    
 }  clientArgs;
@@ -583,6 +567,9 @@ void* connectedClientListen (void *arg){
     return NULL;
 }
 
+
+/***************************************************************************/
+
 int main (int argc, char **argv) {
     /* Os sockets. Um que será o socket que vai escutar pelas conexões
      * e o outro que vai ser o socket específico de cada conexão */
@@ -644,16 +631,8 @@ int main (int argc, char **argv) {
     printf("[Servidor no ar. Aguardando conexões na porta %s]\n",argv[1]);
     printf("[Para finalizar, pressione CTRL+c ou rode um kill ou killall]\n");
    
-    /* O servidor no final das contas é um loop infinito de espera por
-     * conexões e processamento de cada uma individualmente */
-	for (;;) {
-        /* O socket inicial que foi criado é o socket que vai aguardar
-         * pela conexão na porta especificada. Mas pode ser que existam
-         * diversos clientes conectando no servidor. Por isso deve-se
-         * utilizar a função accept. Esta função vai retirar uma conexão
-         * da fila de conexões que foram aceitas no socket listenfd e
-         * vai criar um socket específico para esta conexão. O descritor
-         * deste novo socket é o retorno da função accept. */ 
+    
+	for (;;) {        
                
         if ((connfd = accept(listenfd, (struct sockaddr *) NULL, NULL)) == -1 ) {
             perror("accept :(\n");
@@ -664,6 +643,7 @@ int main (int argc, char **argv) {
         clientArgs* args = malloc(sizeof(clientArgs));
         args->connfd = connfd;
 
+        /*******Após receber conexão de cliente, iniciar thread com listener.********/
         pthread_create(&(threads[subscriptions]), NULL, connectedClientListen, args);                        
     }
 
