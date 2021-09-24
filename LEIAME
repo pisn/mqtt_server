@@ -1,0 +1,40 @@
+Pedro Ivo Siqueira Nepomuceno - 8941321
+*********************Compilando o projeto*******************
+
+Para compilar o projeto, utilize o comando make:
+
+$~:> make
+
+*************************Execução***************************
+
+Para executar o modo normal da aplicação, rode o executável mqtt_server, tendo como único parâmetro a porta que o servidor ouvirá:
+
+$~:> ./mqtt_server 8089
+
+Existe também um modo verborrágico (verbose), que adiciona mais linhas de logs. É usada principalmente para debuging. Pode ser 
+utilizada adicionando o parâmetro -v depois da porta:
+
+$~:> ./mqtt_server 8089 -verborrágico
+
+
+***********************O Projeto**************************
+
+A implementação dessa aplicação segue à risca o protocolo MQTT 3.1.1, inclusive encerrando a conexão se uma mensagem
+mal formada é recebida. Neste caso, uma observação sobre o motivo que causou o encerramento da conexão é informada na saída
+do servidor, mesmo fora do modo verborrágico. 
+
+O projeto começou a ser implementado com um processo por cliente (fork). Entretanto, para que fosse mais fácil a comunicação
+entre os clientes (repasse da publicação de um cliente a outro), passou-se a utilizar multithreading ao invés dos forks. Desta
+forma, por compartilharem a memória, a comunicação é facilitada. Para cada cliente, uma thread é iniciada para escutá-lo (listener) e outra
+para monitorar as mensagens de outros clientes e notificá-los de mensagens de seu interesse (notifier). 
+
+Quando recebidas, as mensagens são armazenadas em uma lista circular de tamanho MAXMESSAGESHISTORY (500 mensagens). 
+A estrutura da lista armazena a cabeça e uma contagem total do número de mensagens que já foram armazenadas (inclusive sobrescrições).
+A thread notifier mantém também a posição da última mensagem que leu. 
+De 1 em 1 segundo, esta thread avança na lista avança todo o caminho entre a última mensagem que leu e a cabeça. Um publish será
+executado para o cliente para cada mensagem de um tópico que for de seu interesse.
+
+O servidor responde mensagens de ping normalmente. 
+
+O servidor foi implementado para trabalhar somente com QualityOfService 0 (embora a estrutura comporte QoS maior, existem outras 
+funções e controles a serem implementados para que funcionem corretamente).

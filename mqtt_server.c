@@ -1,4 +1,4 @@
-?#define _GNU_SOURCE
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -14,7 +14,7 @@
 
 #define LISTENQ 1
 #define MAXDATASIZE 100
-#define MAXMESSAGESHISTORY 100
+#define MAXMESSAGESHISTORY 500
 #define MAXLINE 65000
 #define MAXTOPICS 200
 #define MAXSUBSCRIPTIONS 200
@@ -68,6 +68,14 @@ void addMessageToList(receivedMessagesCircularList* list, receivedMessage* messa
     
     list->head = (list->head + 1)%MAXMESSAGESHISTORY; 
     (list->totalCount)++;   
+
+    if(list->head < list->totalCount){
+        if(verbose){
+            printf("Freeing old message from structure\n");
+        }
+        free(list->history[list->head]);
+    }
+
     list->history[list->head] = message;      
 
     pthread_mutex_unlock(&storageLock);
@@ -309,6 +317,12 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
 
         if(verbose)
             printf("Will Message:%s\n", willMessage->string);
+
+        free(willTopic->string);
+        free(willTopic);
+
+        free(willMessage->string);
+        free(willMessage);
     }
 
     if(userNameFlag){
@@ -317,6 +331,9 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
 
         if(verbose)
             printf("UserName: %s\n", userName->string);
+
+        free(userName->string);
+        free(userName);
     }
 
     if(passwordFlag){
@@ -325,10 +342,14 @@ void CONNECT(activeConnection *connection, uint8_t flags, uint8_t* receivedCommu
         
         if(verbose)
             printf("Password: %s\n", password->string);
+
+        free(password->string);
+        free(password);
     }
     
     //TODO check clientidentifier and disconnect older if reused.
     connection->ClientIdentification=clientIdentifier->string;
+    free(clientIdentifier);
 
     CONNACK(0, connfd);
 }
@@ -376,7 +397,8 @@ void SUBSCRIBE(activeConnection *connection, uint8_t flags, uint8_t* receivedCom
             close(connfd);
         }
 
-        printf("QoS: %d\n", qos);
+        if(verbose)
+            printf("QoS: %d\n", qos);
         
         //Por enquanto, implementando somente QoS 0. Se nao for QoS 0 retronar SUBACK Failure
         if(qos == 0){
@@ -531,7 +553,9 @@ void* connectedClientListen (void *arg){
 
 
     /**** PROCESSO FILHO ****/
-    printf("[Uma conexão aberta]\n");
+    if(verbose)
+        printf("[Uma conexão aberta]\n");
+
     clientArgs *args = (clientArgs*) arg;
 
     activeConnection* connection = malloc(sizeof(activeConnection));
@@ -624,8 +648,19 @@ void* connectedClientListen (void *arg){
     connection->stopSignal = 1;    
 
     pthread_join(listenerThread, NULL);
+
+    free(args);
+    free(connection->ClientIdentification);
+    for(int i=0;i<connection->interestedTopicsLength;i++){
+        free(connection->interestedTopics[i]);        
+    }
+    free(connection->interestedTopics);
+    free(connection);
+
     
-    printf("[Uma conexão fechada]\n");
+    if(verbose)
+        printf("[Uma conexão fechada]\n");
+
     return NULL;
 }
 
@@ -645,7 +680,8 @@ int main (int argc, char **argv) {
     //Lista circular compartilhada entre todos os processos    
     messagesStorage = createMessagesStorage();   
     
-    if (argc != 2 && (argc != 3 && strcmp(argv[2], "-v") != 0) {
+    
+    if (argc < 2 || (argc == 3 && strcmp(argv[2], "-v") != 0)) {
         fprintf(stderr,"Uso: %s <Porta> [-v]\n",argv[0]);
         fprintf(stderr,"Vai rodar um servidor de echo na porta <Porta> TCP\n");
         fprintf(stderr,"Opções:\n");
